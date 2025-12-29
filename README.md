@@ -65,6 +65,12 @@ Install [JAX][jax] and then the other dependencies:
 pip install -U -r requirements.txt
 ```
 
+If using blackwell gpu
+
+```sh
+pip install -U "nvidia-cuda-nvcc-cu12>=12.8"
+```
+
 Training script:
 
 ```sh

@@ -416,3 +416,10 @@ class RestartOnException(Wrapper):
       self.env = self._ctor()
       action['reset'] = np.ones_like(action['reset'])
       return self.env.step(action)
+
+
+class IsaacLabWrapper(Wrapper):
+
+  def __init__(self, env):
+    super().__init__(env)
+    self.env.reset()

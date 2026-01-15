@@ -32,7 +32,6 @@ class Options:
   ckpt_chunksize: int = -1
   precompile: bool = True
 
-
 class Agent(embodied.Agent):
 
   def __new__(subcls, obs_space, act_space, config):

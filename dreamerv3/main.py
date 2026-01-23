@@ -124,9 +124,9 @@ def main(argv=None):
     raise NotImplementedError(config.script)
 
 
-def make_agent(config):
+def make_agent(config, *args, **kwargs):
   from .agent import Agent
-  env = make_env(config, 0)
+  env = make_env(config, 0,*args, **kwargs)
   notlog = lambda k: not k.startswith('log/')
   obs_space = {k: v for k, v in env.obs_space.items() if notlog(k)}
   act_space = {k: v for k, v in env.act_space.items() if k != 'reset'}
@@ -214,6 +214,10 @@ def make_env(config, index, **overrides):
   if suite == 'memmaze':
     from embodied.envs import from_gym
     import memory_maze  # noqa
+
+  elif suite == 'isaaclab':
+    from embodied.envs import isaaclab  # noqa
+
   ctor = {
       'dummy': 'embodied.envs.dummy:Dummy',
       'gym': 'embodied.envs.from_gym:FromGym',
@@ -221,6 +225,7 @@ def make_env(config, index, **overrides):
       'crafter': 'embodied.envs.crafter:Crafter',
       'dmc': 'embodied.envs.dmc:DMC',
       'atari': 'embodied.envs.atari:Atari',
+      'isaaclab': lambda task, **kw: isaaclab.IsaacLabEnv(task, **kw),
       'atari100k': 'embodied.envs.atari:Atari',
       'dmlab': 'embodied.envs.dmlab:DMLab',
       'minecraft': 'embodied.envs.minecraft:Minecraft',

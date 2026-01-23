@@ -419,7 +419,6 @@ class RestartOnException(Wrapper):
 
 
 class IsaacLabWrapper(Wrapper):
-
   def __init__(self, env):
     super().__init__(env)
     self.env.reset()

@@ -1,3 +1,4 @@
+import functools
 import logging
 import threading
 
@@ -7,129 +8,169 @@ import numpy as np
 import gymnasium as gym
 from gym.spaces import Box
 
+# Global registry to store created environments
+_ENV_REGISTRY = {}
+_ENV_LOCK = threading.Lock()
+
+
+def get_isaaclab_env_factory(task, env_args, index=0, **kwargs):
+    """Module-level function that returns cached factory instances."""
+    key = (task, index)
+    with _ENV_LOCK:
+        if key not in _ENV_REGISTRY:
+            _ENV_REGISTRY[key] = IsaacLabEnvFactory(task, env_args, index, **kwargs)
+        return _ENV_REGISTRY[key]
+
+
+class IsaacLabEnvFactory:
+    """Factory that ensures the environment is only created once globally."""
+    
+    def __init__(self, task, env_args, index=0, **kwargs):
+        self._task = task
+        self._env_args = env_args["env_args"]
+        self._kwargs = kwargs
+        self._index = index
+        self._env = None
+    
+    def _get_or_create_env(self):
+        if self._env is None:
+            self._env = IsaacLabEnv(self._task, self._env_args, **self._kwargs)
+        return self._env
+    
+    def __call__(self):
+        return self._get_or_create_env()
+    
+    @property
+    def obs_space(self):
+        return self._get_or_create_env().obs_space
+    
+    @property
+    def act_space(self):
+        return self._get_or_create_env().act_space
+    
+    def step(self, action):
+        return self._get_or_create_env().step(action)
+    
+    def close(self):
+        if self._env is not None:
+            self._env.close()
+            self._env = None
+    
+    def render(self):
+        return self._get_or_create_env().render()
+
 class IsaacLabEnv(embodied.Env):
-  def __init__(
-      self, task, env_args, **kwargs
-  ):
-
-    self._env = gym.make(task, cfg=env_args['config'], render_mode="rgb_array", **env_args)
+  def __init__(self, env, env_args, obs_key='image', act_key='action', **kwargs):
+    if isinstance(env, str):
+      self._env = gym.make(env, cfg=env_args['config'], render_mode="rgb_array", **env_args)
+    else:
+      assert not kwargs, kwargs
+      self._env = env
+      
+    self._obs_dict = hasattr(self._env.observation_space, 'spaces')
+    self._act_dict = hasattr(self._env.action_space, 'spaces')
+    self._obs_key = obs_key
+    self._act_key = act_key
+    self._done = True
+    self._info = None
+    
+  @property
+  def env(self):
+    return self._env
 
   @property
+  def info(self):
+    return self._info
+
+  @functools.cached_property
   def obs_space(self):
-    obs_space : Box = self._env.observation_space
+    if self._obs_dict:
+      spaces = self._flatten(self._env.observation_space.spaces)
+    else:
+      spaces = {self._obs_key: self._env.observation_space}
+    spaces = {k: self._convert(v) for k, v in spaces.items()}
     return {
-        'observation': elements.Space(dtype=np.float32, 
-                                      shape=obs_space.shape, low=obs_space.low, high=obs_space.high),
+        **spaces,
+        'reward': elements.Space(np.float32),
+        'is_first': elements.Space(bool),
+        'is_last': elements.Space(bool),
+        'is_terminal': elements.Space(bool),
     }
 
-  @property
+  @functools.cached_property
   def act_space(self):
-    action_space : Box = self._env.action_space
-    return {
-        'action': elements.Space(dtype=np.float32, 
-                                 shape=action_space.shape, low=action_space.low, high=action_space.high),
-    }
+    if self._act_dict:
+      spaces = self._flatten(self._env.action_space.spaces)
+    else:
+      spaces = {self._act_key: self._env.action_space}
+    spaces = {k: self._convert(v) for k, v in spaces.items()}
+    spaces['reset'] = elements.Space(bool)
+    return spaces
 
   def step(self, action):
-    action = action.copy()
-    index = action.pop('action')
-    action.update(self._action_values[index])
-    action = self._action(action)
-    if action['reset']:
-      obs = self._reset()
+    if action['reset'] or self._done:
+      self._done = False
+      obs = self._env.reset()
+      return self._obs(obs, 0.0, is_first=True)
+    if self._act_dict:
+      action = self._unflatten(action)
     else:
-      following = self.NOOP.copy()
-      for key in ('attack', 'forward', 'back', 'left', 'right'):
-        following[key] = action[key]
-      for act in [action] + ([following] * (self._repeat - 1)):
-        obs = self._env.step(act)
-        if self._env.info and 'error' in self._env.info:
-          obs = self._reset()
-          break
-    obs = self._obs(obs)
-    self._step += 1
-    assert 'pov' not in obs, list(obs.keys())
+      action = action[self._act_key]
+    obs, reward, self._done, self._info = self._env.step(action)
+    return self._obs(
+        obs, reward,
+        is_last=bool(self._done),
+        is_terminal=bool(self._info.get('is_terminal', self._done)))
+
+  def _obs(
+      self, obs, reward, is_first=False, is_last=False, is_terminal=False):
+    if not self._obs_dict:
+      obs = {self._obs_key: obs}
+    obs = self._flatten(obs)
+    obs = {k: np.asarray(v) for k, v in obs.items()}
+    obs.update(
+        reward=np.float32(reward),
+        is_first=is_first,
+        is_last=is_last,
+        is_terminal=is_terminal)
     return obs
 
-  @property
-  def inventory(self):
-    return self._inventory
+  def render(self):
+    image = self._env.render('rgb_array')
+    assert image is not None
+    return image
 
-  def _reset(self):
-    with self.LOCK:
-      obs = self._env.step({'reset': True})
-    self._step = 0
-    self._max_inventory = None
-    self._sticky_attack_counter = 0
-    self._sticky_jump_counter = 0
-    self._pitch = 0
-    self._inventory = {}
-    return obs
+  def close(self):
+    try:
+      self._env.close()
+    except Exception:
+      pass
 
-  def _obs(self, obs):
-    obs['inventory/log'] += obs.pop('inventory/log2')
-    self._inventory = {
-        k.split('/', 1)[1]: obs[k] for k in self._inv_keys
-        if k != 'inventory/air'}
-    inventory = np.array([obs[k] for k in self._inv_keys], np.float32)
-    if self._max_inventory is None:
-      self._max_inventory = inventory
-    else:
-      self._max_inventory = np.maximum(self._max_inventory, inventory)
-    index = self._equip_enum.index(obs['equipped_items/mainhand/type'])
-    equipped = np.zeros(len(self._equip_enum), np.float32)
-    equipped[index] = 1.0
-    # player_x = obs['location_stats/xpos']
-    # player_y = obs['location_stats/ypos']
-    # player_z = obs['location_stats/zpos']
-    obs = {
-        'image': obs['pov'],
-        'inventory': inventory,
-        'inventory_max': self._max_inventory.copy(),
-        'equipped': equipped,
-        'health': np.float32(obs['life_stats/life'] / 20),
-        'hunger': np.float32(obs['life_stats/food'] / 20),
-        'breath': np.float32(obs['life_stats/air'] / 300),
-        'reward': np.float32(0.0),
-        'is_first': obs['is_first'],
-        'is_last': obs['is_last'],
-        'is_terminal': obs['is_terminal'],
-        **{f'log/{k}': np.int64(obs[k]) for k in self._inv_log_keys},
-        # 'log/player_pos': np.array([player_x, player_y, player_z], np.float32),
-    }
-    for key, value in obs.items():
-      space = self._obs_space[key]
-      if not isinstance(value, np.ndarray):
-        value = np.array(value)
-      assert value in space, (key, value, value.dtype, value.shape, space)
-    return obs
+  def _flatten(self, nest, prefix=None):
+    result = {}
+    for key, value in nest.items():
+      key = prefix + '/' + key if prefix else key
+      if isinstance(value, gym.spaces.Dict):
+        value = value.spaces
+      if isinstance(value, dict):
+        result.update(self._flatten(value, key))
+      else:
+        result[key] = value
+    return result
 
-  def _action(self, action):
-    if self._sticky_attack_length:
-      if action['attack']:
-        self._sticky_attack_counter = self._sticky_attack_length
-      if self._sticky_attack_counter > 0:
-        action['attack'] = 1
-        action['jump'] = 0
-        self._sticky_attack_counter -= 1
-    if self._sticky_jump_length:
-      if action['jump']:
-        self._sticky_jump_counter = self._sticky_jump_length
-      if self._sticky_jump_counter > 0:
-        action['jump'] = 1
-        action['forward'] = 1
-        self._sticky_jump_counter -= 1
-    if self._pitch_limit and action['camera'][0]:
-      lo, hi = self._pitch_limit
-      if not (lo <= self._pitch + action['camera'][0] <= hi):
-        action['camera'] = (0, action['camera'][1])
-      self._pitch += action['camera'][0]
-    return action
+  def _unflatten(self, flat):
+    result = {}
+    for key, value in flat.items():
+      parts = key.split('/')
+      node = result
+      for part in parts[:-1]:
+        if part not in node:
+          node[part] = {}
+        node = node[part]
+      node[parts[-1]] = value
+    return result
 
-  def _insert_defaults(self, actions):
-    actions = {name: action.copy() for name, action in actions.items()}
-    for key, default in self.NOOP.items():
-      for action in actions.values():
-        if key not in action:
-          action[key] = default
-    return actions
+  def _convert(self, space):
+    if hasattr(space, 'n'):
+      return elements.Space(np.int32, (), 0, space.n)
+    return elements.Space(space.dtype, space.shape, space.low, space.high)

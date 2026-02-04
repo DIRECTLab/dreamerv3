@@ -215,8 +215,13 @@ def make_env(config, index, **overrides):
     from embodied.envs import from_gym
     import memory_maze  # noqa
 
-  elif suite == 'isaaclab':
-    from embodied.envs import isaaclab  # noqa
+  if suite == 'isaaclab':
+    from embodied.envs.isaaclab import get_isaaclab_env_factory
+    kwargs = config.env.get(suite, {})
+    kwargs.update(overrides)
+    # Use the cached factory getter
+    env = get_isaaclab_env_factory(task, kwargs, index=index)
+    return wrap_env(env, config)
 
   ctor = {
       'dummy': 'embodied.envs.dummy:Dummy',
@@ -225,7 +230,6 @@ def make_env(config, index, **overrides):
       'crafter': 'embodied.envs.crafter:Crafter',
       'dmc': 'embodied.envs.dmc:DMC',
       'atari': 'embodied.envs.atari:Atari',
-      'isaaclab': lambda task, **kw: isaaclab.IsaacLabEnv(task, **kw),
       'atari100k': 'embodied.envs.atari:Atari',
       'dmlab': 'embodied.envs.dmlab:DMLab',
       'minecraft': 'embodied.envs.minecraft:Minecraft',

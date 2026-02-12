@@ -130,7 +130,7 @@ def make_agent(config, *args, **kwargs):
   notlog = lambda k: not k.startswith('log/')
   obs_space = {k: v for k, v in env.obs_space.items() if notlog(k)}
   act_space = {k: v for k, v in env.act_space.items() if k != 'reset'}
-  env.close()
+  # env.close()
   if config.random_agent:
     return embodied.RandomAgent(obs_space, act_space)
   cpdir = elements.Path(config.logdir)
@@ -216,11 +216,11 @@ def make_env(config, index, **overrides):
     import memory_maze  # noqa
 
   if suite == 'isaaclab':
-    from embodied.envs.isaaclab import get_isaaclab_env_factory
+    from embodied.envs.isaaclab import get_env
     kwargs = config.env.get(suite, {})
     kwargs.update(overrides)
     # Use the cached factory getter
-    env = get_isaaclab_env_factory(task, kwargs, index=index)
+    env = get_env(task, kwargs['env_args'])
     return wrap_env(env, config)
 
   ctor = {

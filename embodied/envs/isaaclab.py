@@ -8,65 +8,18 @@ import numpy as np
 import gymnasium as gym
 from gym.spaces import Box
 
-# Global registry to store created environments
-_ENV_REGISTRY = {}
-_ENV_LOCK = threading.Lock()
+_ENV = None
 
-
-def get_isaaclab_env_factory(task, env_args, index=0, **kwargs):
-    """Module-level function that returns cached factory instances."""
-    key = (task, index)
-    with _ENV_LOCK:
-        if key not in _ENV_REGISTRY:
-            _ENV_REGISTRY[key] = IsaacLabEnvFactory(task, env_args, index, **kwargs)
-        return _ENV_REGISTRY[key]
-
-
-class IsaacLabEnvFactory:
-    """Factory that ensures the environment is only created once globally."""
-    
-    def __init__(self, task, env_args, index=0, **kwargs):
-        self._task = task
-        self._env_args = env_args["env_args"]
-        self._kwargs = kwargs
-        self._index = index
-        self._env = None
-    
-    def _get_or_create_env(self):
-        if self._env is None:
-            self._env = IsaacLabEnv(self._task, self._env_args, **self._kwargs)
-        return self._env
-    
-    def __call__(self):
-        return self._get_or_create_env()
-    
-    @property
-    def obs_space(self):
-        return self._get_or_create_env().obs_space
-    
-    @property
-    def act_space(self):
-        return self._get_or_create_env().act_space
-    
-    def step(self, action):
-        return self._get_or_create_env().step(action)
-    
-    def close(self):
-        if self._env is not None:
-            self._env.close()
-            self._env = None
-    
-    def render(self):
-        return self._get_or_create_env().render()
+def get_env(task, env_args):
+  global _ENV
+  if _ENV is None:
+     _ENV = IsaacLabEnv(task, env_args)
+  return _ENV
 
 class IsaacLabEnv(embodied.Env):
   def __init__(self, env, env_args, obs_key='image', act_key='action', **kwargs):
-    if isinstance(env, str):
-      self._env = gym.make(env, cfg=env_args['config'], render_mode="rgb_array", **env_args)
-    else:
-      assert not kwargs, kwargs
-      self._env = env
-      
+    self._env = gym.make(env, cfg=env_args['config'], render_mode="rgb_array", **env_args)
+
     self._obs_dict = hasattr(self._env.observation_space, 'spaces')
     self._act_dict = hasattr(self._env.action_space, 'spaces')
     self._obs_key = obs_key

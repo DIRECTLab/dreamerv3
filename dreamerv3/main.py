@@ -65,6 +65,15 @@ def main(argv=None):
       replay_context=config.replay_context,
   )
 
+  # For IsaacLab, override envs count and force non-parallel mode
+  if config.task.startswith('isaaclab_'):
+    from embodied.envs.isaaclab import get_backend
+    kwargs = config.env.get('isaaclab', {})
+    _, task = config.task.split('_', 1)
+    backend = get_backend(task, kwargs['env_args'])
+    args = args.update(envs=backend.num_envs, debug=True)
+    print(f'IsaacLab: Using {backend.num_envs} vectorized environments (non-parallel mode)')
+
   if config.script == 'train':
     embodied.run.train(
         bind(make_agent, config),
@@ -219,8 +228,8 @@ def make_env(config, index, **overrides):
     from embodied.envs.isaaclab import get_env
     kwargs = config.env.get(suite, {})
     kwargs.update(overrides)
-    # Use the cached factory getter
-    env = get_env(task, kwargs['env_args'])
+    # Pass the index as env_id to get the correct sub-environment wrapper
+    env = get_env(task, kwargs['env_args'], env_id=index)
     return wrap_env(env, config)
 
   ctor = {
